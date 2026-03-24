@@ -1,0 +1,109 @@
+import streamlit as st
+import pyotp
+import qrcode
+import sqlite3
+
+# ---------------- DATABASE ----------------
+conn = sqlite3.connect("users.db", check_same_thread=False)
+c = conn.cursor()
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    username TEXT PRIMARY KEY,
+    password TEXT,
+    secret TEXT
+)
+""")
+conn.commit()
+
+# ---------------- FUNCTIONS ----------------
+def register_user(username, password):
+    secret = pyotp.random_base32()
+    c.execute("INSERT INTO users VALUES (?, ?, ?)", (username, password, secret))
+    conn.commit()
+    return secret
+
+def get_user(username):
+    c.execute("SELECT * FROM users WHERE username=?", (username,))
+    return c.fetchone()
+
+def verify_login(username, password, otp):
+    user = get_user(username)
+    if user and user[1] == password:
+        totp = pyotp.TOTP(user[2])
+        return totp.verify(otp)
+    return False
+
+def generate_qr(secret, username):
+    totp = pyotp.TOTP(secret)
+    uri = totp.provisioning_uri(name=username, issuer_name="SecureChatbot")
+    img = qrcode.make(uri)
+    img.save("qr.png")
+    return "qr.png"
+
+# ---------------- UI ----------------
+st.set_page_config(page_title="Secure Chatbot", page_icon="🤖")
+
+st.title("🤖 Secure Chatbot with OTP Authentication")
+
+menu = st.sidebar.selectbox("Menu", ["Register", "Login"])
+
+# ---------------- REGISTER ----------------
+if menu == "Register":
+    st.subheader("Create Account")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Register"):
+        if get_user(username):
+            st.warning("User already exists!")
+        else:
+            secret = register_user(username, password)
+            qr_path = generate_qr(secret, username)
+
+            st.success("Registration successful!")
+            st.image(qr_path, caption="Scan with Google Authenticator")
+
+# ---------------- LOGIN ----------------
+elif menu == "Login":
+    st.subheader("Login")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    otp = st.text_input("Enter OTP")
+
+    if st.button("Login"):
+        if verify_login(username, password, otp):
+            st.success("Login Successful 🎉")
+
+            # -------- CHATBOT --------
+            st.subheader("💬 Chatbot")
+
+            if "chat_history" not in st.session_state:
+                st.session_state.chat_history = []
+
+            user_input = st.text_input("You:")
+
+            if user_input:
+                # Simple chatbot logic
+                if "hello" in user_input.lower():
+                    response = "Hi! How can I help you?"
+                elif "name" in user_input.lower():
+                    response = "I am your secure chatbot 🤖"
+                elif "project" in user_input.lower():
+                    response = "This is a chatbot with OTP authentication 🔐"
+                elif "bye" in user_input.lower():
+                    response = "Goodbye 👋"
+                else:
+                    response = "Sorry, I didn't understand that."
+
+                st.session_state.chat_history.append(("You", user_input))
+                st.session_state.chat_history.append(("Bot", response))
+
+            # Display chat history
+            for sender, msg in st.session_state.chat_history:
+                st.write(f"**{sender}:** {msg}")
+
+        else:
+            st.error("Invalid credentials or OTP ❌")
